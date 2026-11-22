@@ -8,7 +8,6 @@ from agent import Agent, dispute_email, get_config
 
 st.set_page_config(page_title="ReconAgent – Payments Reconciliation", page_icon="🧾", layout="wide")
 
-MAX_CHAT = 10
 MAX_RUNS = 5
 MAX_MB = 5
 TYPE_LABEL = {"MISSING_SETTLEMENT": "Missing settlement", "AMOUNT_MISMATCH": "Amount mismatch",
@@ -19,21 +18,17 @@ SEV = {"high": "🔴", "medium": "🟠", "low": "🟡"}
 
 ss = st.session_state
 ss.setdefault("agent", None)
-ss.setdefault("chat", [])
 ss.setdefault("runs", 0)
 ss.setdefault("held", [])
 
 # ---------------- sidebar: inputs ----------------
 with st.sidebar:
     st.header("1. Your data")
-    use_sample = st.toggle("Use sample data", value=True,
-                           help="Demo files with planted problems. Turn off to upload your own.")
     files = {}
-    if not use_sample:
-        for kind, hint in [("orders", "order_id, order_date, customer_id, amount, payment_method, status"),
-                           ("settlements", "payment_id, order_id, type, amount, fee, settlement_id"),
-                           ("bank", "reference, credit")]:
-            files[kind] = st.file_uploader(f"{kind.title()} CSV", type=["csv"], help=f"Columns: {hint}")
+    for kind, hint in [("orders", "order_id, order_date, customer_id, amount, payment_method, status"),
+                       ("settlements", "payment_id, order_id, type, amount, fee, settlement_id"),
+                       ("bank", "reference, credit")]:
+        files[kind] = st.file_uploader(f"{kind.title()} CSV", type=["csv"], help=f"Columns: {hint}")
     st.header("2. Settings")
     fee_rate = st.number_input("Agreed gateway fee (%)", 0.0, 10.0, 2.0, 0.1) / 100
     merchant = st.text_input("Your store name", "Your Store", max_chars=40)
@@ -48,8 +43,6 @@ st.write("Matches your **store orders**, **payment-gateway settlements** and **b
 
 
 def read_inputs():
-    if use_sample:
-        return {k: rc.load(k, f"sample_data/{k}.csv") for k in ("orders", "settlements", "bank")}
     missing = [k for k, f in files.items() if f is None]
     if missing:
         raise rc.DataError(f"Please upload: {', '.join(missing)}.")
@@ -65,11 +58,10 @@ if run:
     else:
         try:
             data = read_inputs()
-            with st.status("Agent working…", expanded=True) as status:
+            with st.spinner("Checking your files…"):
                 agent = Agent(data["orders"], data["settlements"], data["bank"], fee_rate, cfg)
-                agent.run(log=st.write)
-                status.update(label="Done", state="complete", expanded=False)
-            ss.agent, ss.chat, ss.held = agent, [], []
+                agent.run()
+            ss.agent, ss.held = agent, []
             ss.runs += 1
         except rc.DataError as e:
             st.error(f"📄 {e}")
@@ -79,7 +71,7 @@ if run:
 
 agent = ss.agent
 if not agent:
-    st.info("👈 Click **Run reconciliation** to try it with the sample data.")
+    st.info("👈 Upload your **Orders**, **Settlements** and **Bank** CSV files, then click **Run reconciliation**.")
     st.stop()
 
 # ---------------- results ----------------
@@ -96,7 +88,7 @@ if not issues and not agent.risks:
     st.balloons()
     st.write("✅ Everything matches. Nothing to do today.")
 
-tab1, tab2, tab3, tab4 = st.tabs(["Issues", "Risky orders", "Approvals", "Ask the agent"])
+tab1, tab2, tab3 = st.tabs(["Issues", "Risky orders", "Approvals"])
 
 with tab1:
     for i in issues:
@@ -153,19 +145,3 @@ with tab3:
         st.download_button("Download held orders (CSV)",
                            pd.DataFrame({"order_id": ss.held, "status": "on_hold"}).to_csv(index=False),
                            "held_orders.csv")
-
-with tab4:
-    st.caption(f"Ask about the results, e.g. “Why is ORD-1019 flagged?” ({MAX_CHAT} questions per session)")
-    for m in ss.chat:
-        st.chat_message(m["role"]).write(m["content"])
-    asked = sum(1 for m in ss.chat if m["role"] == "user")
-    q = st.chat_input("Ask the agent…", disabled=asked >= MAX_CHAT, max_chars=500)
-    if q:
-        st.chat_message("user").write(q)
-        with st.spinner("Thinking…"):
-            ans = agent.chat(ss.chat, q)
-        ss.chat += [{"role": "user", "content": q}, {"role": "assistant", "content": ans}]
-        st.chat_message("assistant").write(ans)
-
-with st.expander("🔍 Agent trace (what tools it called)"):
-    st.json(agent.trace or [{"mode": "rule-based"}])
